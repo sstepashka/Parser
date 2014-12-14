@@ -29,12 +29,33 @@ class Parser(object):
         super(Parser, self).__init__()
         self.proxies = proxies
 
+        self.urls = []
+
+    def add(self, url):
+        self.urls.append(url)
+
+    def pop(self):
+        try:
+            url = self.urls[0]
+            del self.urls[0]
+            return url
+        except IndexError, e:
+            return None
+        except Exception, e:
+            raise
+
     def parse(self, url):
         proxy = self.proxies.next()
 
-        proxies = {'http': proxy}
-        response = urllib.urlopen(url, proxies=proxies)
-        print response.read()
+        if not proxy is None:
+            proxies = {'http': proxy}
+            response = urllib.urlopen(url, proxies=proxies)
+            data = response.read()
+
+    def parse(self):
+        url = self.pop()
+        if not url is None:
+            self.parse(url)
         
 
 def main():
@@ -44,7 +65,9 @@ def main():
     proxies = Proxies('proxies.txt')
     parser = Parser(proxies)
 
-    parser.parse(url)
+    parser.add(url)
+
+    parser.parse()
 
 if __name__ == '__main__':
     main()

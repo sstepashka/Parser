@@ -1,13 +1,16 @@
 #!/usr/bin/env python
+# -*- coding: utf-8 -*-
 
 import urllib, urllib2
 from lxml import etree, html
 import re
 import os.path
 from antigate import AntiGate
-
+from priority_queue import PriorityQueue
 
 ANTIGATE_KEY = 'a2abe6583c0e14299c36ba3720201520'
+
+CAPTCHA_URL = 'http://www.list-org.com/bot.php'
 
 
 class NotFoundFoundersException(Exception):
@@ -15,7 +18,24 @@ class NotFoundFoundersException(Exception):
 
 
 class CaptchaException(Exception):
+    def __init__(self, response):
+        self.response = response
+
+
+class NotFoundCaptcha(Exception):
     pass
+
+
+class JobEnd(Exception):
+    pass
+
+
+class NoRedirection(urllib2.HTTPErrorProcessor):
+
+    def http_response(self, request, response):
+        return response
+
+    https_response = http_response
 
 
 class Proxies(object):
@@ -46,15 +66,21 @@ class Parser(object):
         super(Parser, self).__init__()
         self.proxies = proxies
 
-        self.companies = []
+        self.companies = PriorityQueue()
 
-    def add(self, url):
-        self.companies.append(url)
+        self.parsed = set()
+
+    def add(self, url, priority = 1.):
+        if not url in self.parsed:
+            self.companies.push(url, priority)
 
     def pop(self):
         try:
-            companyID = self.companies[0]
-            del self.companies[0]
+            companyID = self.companies.pop()
+
+            while not companyID:
+                companyID = self.companies.pop()
+
             return companyID
         except IndexError, e:
             return None
@@ -71,35 +97,47 @@ class Parser(object):
             with open(cache_path, "r") as cache:
                 data = cache.read()
         else:
-            # {"http":proxy}
-            # proxy_support = urllib2.ProxyHandler()
-            # opener = urllib2.build_opener(proxy_support)
-            # urllib2.install_opener(opener)
+            # proxy_support = urllib2.ProxyHandler({"http":proxy})
+            opener = urllib2.build_opener(NoRedirection)
+            urllib2.install_opener(opener)
 
             url = "http://www.list-org.com/company/%s/show/founders" % (companyID)
             print "URL: " + url
 
-            data = urllib2.urlopen(url).read()
+            response = urllib2.urlopen(url)
+            status_code = response.getcode()
 
-            if len(self.grepFounders(data)):
+            if status_code == 200:
+                data = response.read()
+
                 print "Save company %s to cache: %s" % (companyID, cache_path)
                 with open(cache_path, "w") as cache:
                     cache.write(data)
 
+            elif status_code == 307 and response.info().getheader('Location') == CAPTCHA_URL:
+                raise CaptchaException(response)
+            else:
+                pass
+
         return data
 
     def parseCompany(self, companyID):
+        self.parsed.add(companyID)
+
         proxy = self.proxies.next()
 
         print "Using proxy: " + proxy
 
         data = self.loadCompanyDataOrCache(companyID, proxy)
 
+        if len(self.parsed) > 1000:
+            raise JobEnd()
+
         founders = self.grepFounders(data)
 
         if founders and len(founders):
             for founder in founders:
-                self.add(founder)
+                self.add(founder['companyID'], founder['priority'])
             
             print "Found %i founders" % len(founders)
         else:
@@ -107,16 +145,50 @@ class Parser(object):
 
     def grepFounders(self, htmlText):
         tree = html.fromstring(htmlText)
-        elements = tree.xpath('//table[@class="tt f08"]/tr/td[2]/a/@href')
+        elements = tree.xpath('//table[@class="tt f08"]/tr')
 
-        return list(map(lambda element: re.split(r'[\\/]', element)[-1], elements))
+        result = []
+
+        for element in elements[1:-1]:
+            link1 = element.xpath('td[2]/a/@href')
+            if len(link1) > 0:
+                link = link1[0]
+                percent = float(element.xpath('td[3]/text()')[0][:-1])
+
+                if percent <= 0.:
+                    percent = 0.1
+
+                company_sum = self.parseSum(element.xpath('td[4]/text()')[0])
+
+                priority = company_sum / percent
+                company_identifier = re.split(r'[\\/]', link)[-1]
+
+                result.append(
+                        {
+                        'companyID': company_identifier,
+                        'priority': priority,
+                        }
+                    )
+
+        return result
+
+    def parseSum(self, sum_string):
+        res = sum_string.split(' ')
+
+        factor = 1.
+
+        if res[-1] == u'млн.руб.':
+            factor = 1000.
+
+        return float(res[0]) * factor
 
     def parse(self):
         companyID = self.pop()
-        while companyID:
+        end = False
+        while companyID and not end:
             connect = False
 
-            while not connect:
+            while not connect and not end:
                 try:
                     self.parseCompany(companyID)
                     connect = True
@@ -125,45 +197,83 @@ class Parser(object):
                     connect = False
                 except NotFoundFoundersException, e:
                     print "Not found founders, maybe captcha"
-                    self.captcha(companyID)
+                    connect = True
+                except CaptchaException, e:
+                    self.captcha(e.response)
                     connect = False
+
+                except JobEnd, e:
+                    end = True
+                    print 'Job End !!!'
                 except Exception, e:
                     raise
 
             companyID = self.pop()
 
-    def captcha(self, companyID):
+        print companyID
+
+    def captcha(self, response):
         captcha_url = 'http://www.list-org.com/bot.php'
 
-        url = "http://www.list-org.com/company/%s/show/founders" % (companyID)
+        cookie = response.info().getheader('Set-Cookie')
 
-        opener = urllib2.build_opener()
+        opener = urllib2.build_opener(NoRedirection)
+        opener.addheaders.append(('Cookie', cookie))
         urllib2.install_opener(opener)
 
-        data = urllib2.urlopen(url).read()
+        captcha_response = urllib2.urlopen(captcha_url)
+        data = captcha_response.read()
 
         tree = html.fromstring(data)
         elements = tree.xpath('//div[@class="content"]/form/img/@src')
 
+        print data
+        print response.info()
+
         if len(elements) > 0:
-            #captcha
-            captcha_data = urllib2.urlopen(elements[0]).read()
-            print '!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!'
-            print '!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!'
-            print elements[0]
-            print '!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!'
-            print '!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!'
+            image_url = elements[0]
+            captcha_data = urllib2.urlopen(image_url).read()
+
+            with open('captcha.gif', "w") as myfile:
+                    myfile.write(captcha_data)
+            
+            gate = AntiGate(ANTIGATE_KEY, 'captcha.gif')
+            # gate = raw_input()
+
+            file_path = 'captcha/' + str(gate) + '.gif'
+
+            with open(file_path, "w") as myfile:
+                    myfile.write(captcha_data)
+
+            values = {
+                    'keystring' : str(gate),
+                    'submit' : " Проверить! ",
+                    }
+
+            opener = urllib2.build_opener()
+            opener.addheaders.append(('Cookie', cookie))
+            urllib2.install_opener(opener)
+
+            data = urllib.urlencode(values)
+            req = urllib2.Request(captcha_url, data)
+            req.get_method = lambda: 'POST'
+
+            try:
+                response = urllib2.urlopen(req)
+                the_page = response.read()
+                print the_page
+            except urllib2.HTTPError, e:
+                contents = e.read()
+                print contents
+            except Exception, e:
+                raise
+
         else:
-            #ignore
-            pass
+            raise NotFoundCaptcha
 
         
 
 def main():
-    # How to Use AntiGate
-    # gate = AntiGate(ANTIGATE_KEY, 'captcha.gif')
-    # print gate
-
     proxies = Proxies('proxies.txt')
     parser = Parser(proxies)
 

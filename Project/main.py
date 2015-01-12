@@ -4,10 +4,17 @@ import urllib, urllib2
 from lxml import etree, html
 import re
 import os.path
+from antigate import AntiGate
 
-#antigate key a2abe6583c0e14299c36ba3720201520
 
-class NotFoundFounders(Exception):
+ANTIGATE_KEY = 'a2abe6583c0e14299c36ba3720201520'
+
+
+class NotFoundFoundersException(Exception):
+    pass
+
+
+class CaptchaException(Exception):
     pass
 
 
@@ -60,13 +67,14 @@ class Parser(object):
         data = None
 
         if os.path.isfile(cache_path):
-            print "Load company %s from caache" % companyID
+            print "Load company %s from cache" % companyID
             with open(cache_path, "r") as cache:
                 data = cache.read()
         else:
-            proxy_support = urllib2.ProxyHandler({"http":proxy})
-            opener = urllib2.build_opener(proxy_support)
-            urllib2.install_opener(opener)
+            # {"http":proxy}
+            # proxy_support = urllib2.ProxyHandler()
+            # opener = urllib2.build_opener(proxy_support)
+            # urllib2.install_opener(opener)
 
             url = "http://www.list-org.com/company/%s/show/founders" % (companyID)
             print "URL: " + url
@@ -95,7 +103,7 @@ class Parser(object):
             
             print "Found %i founders" % len(founders)
         else:
-            raise NotFoundFounders
+            raise NotFoundFoundersException
 
     def grepFounders(self, htmlText):
         tree = html.fromstring(htmlText)
@@ -115,16 +123,47 @@ class Parser(object):
                 except IOError, e:
                     print "Connection Error, next proxy using"
                     connect = False
-                except NotFoundFounders, e:
+                except NotFoundFoundersException, e:
                     print "Not found founders, maybe captcha"
+                    self.captcha(companyID)
                     connect = False
                 except Exception, e:
                     raise
 
             companyID = self.pop()
+
+    def captcha(self, companyID):
+        captcha_url = 'http://www.list-org.com/bot.php'
+
+        url = "http://www.list-org.com/company/%s/show/founders" % (companyID)
+
+        opener = urllib2.build_opener()
+        urllib2.install_opener(opener)
+
+        data = urllib2.urlopen(url).read()
+
+        tree = html.fromstring(data)
+        elements = tree.xpath('//div[@class="content"]/form/img/@src')
+
+        if len(elements) > 0:
+            #captcha
+            captcha_data = urllib2.urlopen(elements[0]).read()
+            print '!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!'
+            print '!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!'
+            print elements[0]
+            print '!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!'
+            print '!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!'
+        else:
+            #ignore
+            pass
+
         
 
 def main():
+    # How to Use AntiGate
+    # gate = AntiGate(ANTIGATE_KEY, 'captcha.gif')
+    # print gate
+
     proxies = Proxies('proxies.txt')
     parser = Parser(proxies)
 

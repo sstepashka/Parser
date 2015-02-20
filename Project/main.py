@@ -7,10 +7,13 @@ import re
 import os.path
 from antigate import AntiGate
 from priority_queue import PriorityQueue
+import time
 
 ANTIGATE_KEY = 'a2abe6583c0e14299c36ba3720201520'
 
 CAPTCHA_URL = 'http://www.list-org.com/bot.php'
+
+LAST_COOKIE = None
 
 
 class NotFoundFoundersException(Exception):
@@ -107,6 +110,13 @@ class Parser(object):
             response = urllib2.urlopen(url)
             status_code = response.getcode()
 
+            LAST_COOKIE = response.info().getheader('Set-Cookie')
+            opener = urllib2.build_opener(NoRedirection)
+            opener.addheaders.append(('Cookie', LAST_COOKIE))
+            urllib2.install_opener(opener)
+            r = urllib2.urlopen('http://www.list-org.com/js/org.js')
+            # time.sleep(1)
+
             if status_code == 200:
                 data = response.read()
 
@@ -130,8 +140,8 @@ class Parser(object):
 
         data = self.loadCompanyDataOrCache(companyID, proxy)
 
-        if len(self.parsed) > 1000:
-            raise JobEnd()
+        #if len(self.parsed) > 1000:
+        #    raise JobEnd()
 
         founders = self.grepFounders(data)
 
@@ -209,6 +219,7 @@ class Parser(object):
                     raise
 
             companyID = self.pop()
+            #time.sleep(15)
 
         print companyID
 
@@ -233,16 +244,28 @@ class Parser(object):
         if len(elements) > 0:
             image_url = elements[0]
             captcha_data = urllib2.urlopen(image_url).read()
+			
+            print image_url
 
-            with open('captcha.gif', "w") as myfile:
+            with open('captcha.gif', "wb") as myfile:
                     myfile.write(captcha_data)
+                    myfile.close()
             
-            gate = AntiGate(ANTIGATE_KEY, 'captcha.gif')
+            config = {
+                    'is_russian': '1',
+                }
+            gate = None
+            while not gate:
+                try:
+                    gate = AntiGate(ANTIGATE_KEY, 'captcha.gif', send_config=config)
+                    gate = gate.lower()
+                except Exception, e:
+                    print e
             # gate = raw_input()
 
             file_path = 'captcha/' + str(gate) + '.gif'
 
-            with open(file_path, "w") as myfile:
+            with open(file_path, "wb") as myfile:
                     myfile.write(captcha_data)
 
             values = {

@@ -73,7 +73,7 @@ class Parser(object):
 
         self.parsed = set()
 
-    def add(self, url, priority = 1.):
+    def add(self, url, priority = float('inf')):
         if not url in self.parsed:
             self.companies.push(url, priority)
 
@@ -115,7 +115,6 @@ class Parser(object):
             opener.addheaders.append(('Cookie', LAST_COOKIE))
             urllib2.install_opener(opener)
             r = urllib2.urlopen('http://www.list-org.com/js/org.js')
-            # time.sleep(1)
 
             if status_code == 200:
                 data = response.read()
@@ -238,22 +237,28 @@ class Parser(object):
         tree = html.fromstring(data)
         elements = tree.xpath('//div[@class="content"]/form/img/@src')
 
-        print data
-        print response.info()
+        # print data
+        print 'CAPTCHA!!!!!!'
+        # print response.info()
 
         if len(elements) > 0:
             image_url = elements[0]
             captcha_data = urllib2.urlopen(image_url).read()
 			
-            print image_url
+            print 'image_url: ' + image_url
 
             with open('captcha.gif', "wb") as myfile:
                     myfile.write(captcha_data)
                     myfile.close()
             
-            config = {
-                    'is_russian': '1',
-                }
+            config = None
+
+            if os.name == 'nt':
+                config = {'is_russian': 1,}
+            else:
+                config = {'is_russian': '1',}
+
+            
             gate = None
             while not gate:
                 try:
@@ -261,7 +266,6 @@ class Parser(object):
                     gate = gate.lower()
                 except Exception, e:
                     print e
-            # gate = raw_input()
 
             file_path = 'captcha/' + str(gate) + '.gif'
 
@@ -300,11 +304,21 @@ def main():
     proxies = Proxies('proxies.txt')
     parser = Parser(proxies)
 
-    companyID = '2100'
-
-    parser.add(companyID)
+    with open('companies.txt', 'r') as f:
+        lines = [line.strip() for line in f.readlines() if line]
+        for line in lines:
+            parser.add(line)
 
     parser.parse()
+
+    # proxies = Proxies('proxies.txt')
+    # parser = Parser(proxies)
+
+    # companyID = '2100'
+
+    # parser.add(companyID)
+
+    # parser.parse()
 
 if __name__ == '__main__':
     main()
